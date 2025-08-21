@@ -1,11 +1,12 @@
 import serial
 import time
-import struct
 
 PORT = 'COM5'
 BAUD = 921600
-SAVE_FILE = 'data_bin3.txt'
+SAVE_FILE = 'data_bin2.txt'
 RECORD_DURATION = 10  # 초 단위
+
+SCALE_FACTOR = 0.10197 / 32550.0
 
 samples = []
 
@@ -16,23 +17,36 @@ try:
         leftover = b''
 
         while time.time() - start_time < RECORD_DURATION:
-            data = ser.read(ser.in_waiting or 1)
+            data = ser.read(ser.in_waiting or 4096)
             if not data:
                 continue
 
             data = leftover + data
-            n_bytes = len(data) - (len(data) % 4)  # 4바이트 단위로 잘라야 함
+            n_bytes = len(data) - (len(data) % 3)
             chunk = data[:n_bytes]
             leftover = data[n_bytes:]
 
-            for i in range(0, len(chunk), 4):
-                val_bytes = chunk[i:i+4]
-                # float로 읽기 (STM32에서 보낸 그대로)
-                sample_float = struct.unpack('<f', val_bytes)[0]
+            # 여기서 바로 chunk 처리
+            for i in range(0, len(chunk), 3):
+                b0, b1, b2 = chunk[i:i+3]
+
+                # 24bit signed integer 계산
+                sample_int32 = b0 | (b1 << 8) | (b2 << 16)
+                if sample_int32 & 0x800000:  # 음수 체크
+                    sample_int32 -= 1 << 24
+
+                # -1 ~ 1 범위로 정규화
+                sample_normalized = sample_int32 / 8388608.0  # 2^23
+
+                # 필요하면 스케일링 적용
+                sample_float = sample_normalized * SCALE_FACTOR
                 samples.append(sample_float)
+
+
 
         print(f"[INFO] 저장 완료: {SAVE_FILE} ({len(samples)} samples)")
 
+    # 텍스트 파일로 저장
     with open(SAVE_FILE, 'w') as f:
         for s in samples:
             f.write(f"{s}\n")
